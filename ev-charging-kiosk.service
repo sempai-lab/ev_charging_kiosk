@@ -1,0 +1,19 @@
+[Unit]
+Description=EV Charging Kiosk Application
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/EV_CHARGING_KIOSK
+Environment="NODE_ENV=production"
+Environment="PORT=3000"
+ExecStart=/usr/bin/node /home/pi/EV_CHARGING_KIOSK/server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,6 +1,6 @@
 # EV Charging Station - Pay Before Charge System
 
-A comprehensive React-based EV charging station management system with pay-before-charge functionality, designed for Raspberry Pi 3B integration.
+A comprehensive React-based EV charging station management system with pay-before-charge functionality, designed for Raspberry Pi 4B integration.
 
 ## 🚀 Features
 
@@ -60,6 +60,8 @@ A comprehensive React-based EV charging station management system with pay-befor
 
 ## 📦 Installation
 
+### Development Setup
+
 ```bash
 # Install dependencies
 npm install
@@ -76,6 +78,22 @@ npm run typecheck
 # Lint
 npm run lint
 ```
+
+### Production/Raspberry Pi Setup
+
+```bash
+# Install dependencies
+npm install
+
+# Build and serve the application
+npm start
+
+# Or separately:
+npm run build
+npm run serve
+```
+
+**For detailed Raspberry Pi 4B deployment instructions, see [RASPBERRY_PI_SETUP.md](./RASPBERRY_PI_SETUP.md)**
 
 ## 🏗️ Project Structure
 
@@ -170,8 +188,39 @@ Access the admin panel via the "Recharge Balance (Admin)" link on the authentica
 - Energy delivered is tracked in Watt-hours (Wh) and displayed in kWh
 - Session data is automatically saved and can be viewed in transaction history
 
+## 🍓 Raspberry Pi 4B Deployment
+
+This application is ready to run on Raspberry Pi 4B. See the comprehensive setup guide:
+
+**[📖 Raspberry Pi Setup Guide](./RASPBERRY_PI_SETUP.md)**
+
+### Quick Start on Raspberry Pi
+
+1. **Transfer project to Raspberry Pi**
+2. **Run setup script:**
+   ```bash
+   chmod +x setup-raspberry-pi.sh
+   ./setup-raspberry-pi.sh
+   ```
+3. **Start the application:**
+   ```bash
+   npm start
+   ```
+4. **Access at:** `http://<raspberry-pi-ip>:3000`
+
+### Auto-Start on Boot
+
+To make the application start automatically on boot:
+
+```bash
+chmod +x install-service.sh
+sudo ./install-service.sh
+sudo systemctl start ev-charging-kiosk.service
+```
+
 ## 🚧 Future Enhancements
 
+- [x] Raspberry Pi 4B deployment support
 - [ ] Real hardware integration (Raspberry Pi GPIO)
 - [ ] QR code payment integration
 - [ ] Multi-language support
@@ -182,4 +231,3 @@ Access the admin panel via the "Recharge Balance (Admin)" link on the authentica
 ## 📄 License
 
 This project is a template/starter for EV charging station management systems.
-
