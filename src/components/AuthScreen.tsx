@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CreditCard, Battery, User, Wallet, RefreshCw, ChevronDown } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { db } from '../services/database';
+import { hardware, type RfidEvent } from '../services/hardware';
 
 export default function AuthScreen() {
   const navigate = useNavigate();
@@ -12,9 +13,41 @@ export default function AuthScreen() {
   const [showRfidSelector, setShowRfidSelector] = useState(false);
   const [users] = useState(db.getUsers());
 
+  const cleanupRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     refreshBatteryStatus();
-  }, [refreshBatteryStatus]);
+
+    // Start listening for real-time RFID events
+    const cleanup = hardware.startRfidEventStream((event: RfidEvent) => {
+      console.log('[AuthScreen] RFID event:', event);
+
+      if (event.type === 'rfid_detected') {
+        if (event.success && event.user) {
+          // Valid user detected - update UI automatically
+          setCurrentUser(event.user);
+          setError(null);
+          setScanning(false);
+        } else {
+          // Invalid card
+          setError(event.error || 'RFID card not recognized. Please try again or contact admin.');
+          setScanning(false);
+        }
+      } else if (event.type === 'insufficient_balance') {
+        setError('Insufficient balance. Please recharge your account.');
+        setScanning(false);
+      }
+    });
+
+    cleanupRef.current = cleanup;
+
+    // Cleanup on unmount
+    return () => {
+      if (cleanupRef.current) {
+        cleanupRef.current();
+      }
+    };
+  }, [refreshBatteryStatus, setCurrentUser]);
 
   const handleScan = async () => {
     setScanning(true);
@@ -63,6 +96,10 @@ export default function AuthScreen() {
           </div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">EV Charging Station</h1>
           <p className="text-gray-600">Scan your RFID card to begin</p>
+          <p className="text-xs text-green-600 mt-1 flex items-center justify-center gap-1">
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            Real-time scanning active
+          </p>
         </div>
 
         {!currentUser ? (
