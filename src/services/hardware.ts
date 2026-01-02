@@ -61,8 +61,17 @@ class HardwareService {
         method: 'GET',
         signal: AbortSignal.timeout(2000)
       });
-      return response.ok;
-    } catch {
+      if (response.ok) {
+        console.log('[Hardware] Backend is available at', API_BASE_URL);
+        return true;
+      } else {
+        console.warn('[Hardware] Backend health check failed:', response.status);
+        return false;
+      }
+    } catch (error) {
+      console.warn('[Hardware] Backend not available:', error instanceof Error ? error.message : 'Connection failed');
+      console.warn('[Hardware] Attempted to connect to:', API_BASE_URL);
+      console.warn('[Hardware] Make sure the backend is running: python3 backend/rfid_service.py');
       return false;
     }
   }

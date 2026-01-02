@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CreditCard, Battery, User, Wallet, RefreshCw, ChevronDown } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { db } from '../services/database';
 import { hardware, type RfidEvent } from '../services/hardware';
+import type { User as UserType } from '../types';
 
 export default function AuthScreen() {
   const navigate = useNavigate();
@@ -11,81 +12,171 @@ export default function AuthScreen() {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRfidSelector, setShowRfidSelector] = useState(false);
-  const [users] = useState(db.getUsers());
+  const [backendConnected, setBackendConnected] = useState<boolean | null>(null);
+  const [cardScanned, setCardScanned] = useState(false); // Track if card was actually scanned
+  
+  // Memoize users list to prevent unnecessary re-renders
+  const users = useMemo(() => db.getUsers(), []);
 
   const cleanupRef = useRef<(() => void) | null>(null);
+  const backendCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastBackendCheckRef = useRef<number>(0);
+  const currentUserRef = useRef(currentUser);
+  const BACKEND_CHECK_CACHE_MS = 3000; // Cache backend check for 3 seconds
+
+  // Update ref when currentUser changes
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  // Memoize RFID event handler to prevent recreation on every render
+  // Using ref for currentUser to avoid dependency issues
+  const handleRfidEvent = useCallback((event: RfidEvent) => {
+    console.log('[AuthScreen] RFID event:', event);
+
+    // IMPORTANT: Only process RFID events when no user is currently logged in
+    // This prevents the same card from repeatedly updating the UI
+    // Use ref to get latest value without causing re-renders
+    if (currentUserRef.current) {
+      console.log('[AuthScreen] Ignoring RFID event - user already authenticated');
+      return; // Ignore events when user is already logged in
+    }
+
+    if (event.type === 'rfid_detected') {
+      if (event.success && event.user) {
+        // Valid user detected - update UI automatically
+        // Ensure all required User fields are present
+        const user: UserType = {
+          id: event.user.id,
+          name: event.user.name,
+          rfidCardId: event.user.rfidCardId,
+          balance: event.user.balance,
+          phoneNumber: event.user.phoneNumber,
+          createdAt: event.user.createdAt || new Date().toISOString(), // Default if missing
+        };
+        setCurrentUser(user);
+        setCardScanned(true); // Mark that card was scanned
+        setError(null);
+        setScanning(false);
+        setBackendConnected(true); // Update connection status on successful event
+      } else {
+        // Invalid card
+        setError(event.error || 'RFID card not recognized. Please try again or contact admin.');
+        setScanning(false);
+        setCardScanned(false);
+      }
+    } else if (event.type === 'insufficient_balance') {
+      setError('Insufficient balance. Please recharge your account.');
+      setScanning(false);
+      setCardScanned(false);
+    }
+  }, [setCurrentUser]); // Removed currentUser from deps, using ref instead
+
+  // Optimized backend check with caching
+  const checkBackend = useCallback(async () => {
+    const now = Date.now();
+    // Use cached result if checked recently
+    if (now - lastBackendCheckRef.current < BACKEND_CHECK_CACHE_MS) {
+      return;
+    }
+    lastBackendCheckRef.current = now;
+
+    try {
+      const response = await fetch('http://localhost:5000/api/health', {
+        cache: 'no-store', // Prevent browser cache
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+      setBackendConnected(response.ok);
+    } catch {
+      setBackendConnected(false);
+    }
+  }, []);
 
   useEffect(() => {
     refreshBatteryStatus();
 
-    // Start listening for real-time RFID events
-    const cleanup = hardware.startRfidEventStream((event: RfidEvent) => {
-      console.log('[AuthScreen] RFID event:', event);
+    // Initial backend check
+    checkBackend();
+    
+    // Check backend connection status with caching (every 5 seconds, but cached for 3 seconds)
+    backendCheckIntervalRef.current = setInterval(checkBackend, 5000);
 
-      if (event.type === 'rfid_detected') {
-        if (event.success && event.user) {
-          // Valid user detected - update UI automatically
-          setCurrentUser(event.user);
-          setError(null);
-          setScanning(false);
-        } else {
-          // Invalid card
-          setError(event.error || 'RFID card not recognized. Please try again or contact admin.');
-          setScanning(false);
-        }
-      } else if (event.type === 'insufficient_balance') {
-        setError('Insufficient balance. Please recharge your account.');
-        setScanning(false);
-      }
-    });
-
+    // Start listening for real-time RFID events with memoized handler
+    const cleanup = hardware.startRfidEventStream(handleRfidEvent);
     cleanupRef.current = cleanup;
 
     // Cleanup on unmount
     return () => {
+      if (backendCheckIntervalRef.current) {
+        clearInterval(backendCheckIntervalRef.current);
+      }
       if (cleanupRef.current) {
         cleanupRef.current();
       }
     };
-  }, [refreshBatteryStatus, setCurrentUser]);
+  }, [refreshBatteryStatus, handleRfidEvent, checkBackend]); // Removed currentUser from deps, using ref in callback
 
-  const handleScan = async () => {
+  const handleScan = useCallback(async () => {
     setScanning(true);
     setError(null);
+    setCardScanned(false);
     
     try {
       const user = await scanRfid();
-      if (!user) {
+      if (user) {
+        setCardScanned(true); // Mark that card was scanned
+      } else {
         setError('RFID card not recognized. Please try again or contact admin.');
+        setCardScanned(false);
       }
     } catch (err) {
       setError('Failed to scan RFID card. Please try again.');
+      setCardScanned(false);
     } finally {
       setScanning(false);
     }
-  };
+  }, [scanRfid]);
 
-  const handleProceed = () => {
-    if (currentUser) {
-      navigate('/select-cost');
+  const handleProceed = useCallback(() => {
+    // CRITICAL: Only allow proceeding if:
+    // 1. User is authenticated
+    // 2. Card was actually scanned (not just manually selected)
+    if (!currentUser) {
+      setError('Please scan your RFID card first.');
+      return;
     }
-  };
+    
+    if (!cardScanned) {
+      setError('Please scan your RFID card to proceed. Manual selection is not allowed for security.');
+      return;
+    }
+    
+    // All validations passed - proceed to next screen
+    navigate('/select-cost');
+  }, [currentUser, cardScanned, navigate]);
 
-  const handleRecharge = () => {
+  const handleRecharge = useCallback(() => {
     navigate('/admin');
-  };
+  }, [navigate]);
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     setCurrentUser(null);
     setError(null);
     setShowRfidSelector(false);
-  };
+    setCardScanned(false); // Reset card scan flag
+  }, [setCurrentUser]);
 
-  const handleSelectRfid = (user: typeof users[0]) => {
+  const handleSelectRfid = useCallback((user: typeof users[0]) => {
+    // Manual selection is allowed but won't allow proceeding
+    // This is for testing/admin purposes only
     setCurrentUser(user);
     setShowRfidSelector(false);
     setError(null);
-  };
+    setCardScanned(false); // Manual selection doesn't count as scanned
+  }, [setCurrentUser, users]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
@@ -96,10 +187,22 @@ export default function AuthScreen() {
           </div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">EV Charging Station</h1>
           <p className="text-gray-600">Scan your RFID card to begin</p>
-          <p className="text-xs text-green-600 mt-1 flex items-center justify-center gap-1">
-            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            Real-time scanning active
-          </p>
+          {backendConnected === false ? (
+            <p className="text-xs text-red-600 mt-1 flex items-center justify-center gap-1">
+              <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+              Backend not connected - Start backend: python3 backend/rfid_service.py
+            </p>
+          ) : backendConnected === true ? (
+            <p className="text-xs text-green-600 mt-1 flex items-center justify-center gap-1">
+              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+              Real-time scanning active
+            </p>
+          ) : (
+            <p className="text-xs text-yellow-600 mt-1 flex items-center justify-center gap-1">
+              <span className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>
+              Checking backend connection...
+            </p>
+          )}
         </div>
 
         {!currentUser ? (
@@ -169,15 +272,25 @@ export default function AuthScreen() {
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 space-y-4">
               <div className="flex items-center gap-3">
                 <User className="w-5 h-5 text-gray-600" />
-                <div>
+                <div className="flex-1">
                   <p className="text-sm text-gray-600">User Name</p>
                   <p className="text-lg font-semibold text-gray-900">{currentUser.name}</p>
                 </div>
               </div>
 
+              {currentUser.phoneNumber && (
+                <div className="flex items-center gap-3">
+                  <CreditCard className="w-5 h-5 text-gray-600" />
+                  <div className="flex-1">
+                    <p className="text-sm text-gray-600">Contact Number</p>
+                    <p className="text-lg font-semibold text-gray-900">{currentUser.phoneNumber}</p>
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center gap-3">
                 <Wallet className="w-5 h-5 text-gray-600" />
-                <div>
+                <div className="flex-1">
                   <p className="text-sm text-gray-600">Current Balance</p>
                   <p className="text-2xl font-bold text-green-600">₹{currentUser.balance.toFixed(2)}</p>
                 </div>
@@ -185,7 +298,7 @@ export default function AuthScreen() {
 
               <div className="flex items-center gap-3">
                 <Battery className="w-5 h-5 text-gray-600" />
-                <div>
+                <div className="flex-1">
                   <p className="text-sm text-gray-600">Battery Level</p>
                   <div className="flex items-center gap-2">
                     <div className="flex-1 bg-gray-200 rounded-full h-3">
@@ -203,11 +316,21 @@ export default function AuthScreen() {
             </div>
 
             <div className="space-y-3">
+              {!cardScanned && (
+                <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg text-sm">
+                  ⚠️ Please scan your RFID card to proceed. Manual selection is not allowed.
+                </div>
+              )}
               <button
                 onClick={handleProceed}
-                className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 shadow-lg"
+                disabled={!cardScanned}
+                className={`w-full text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 shadow-lg ${
+                  cardScanned
+                    ? 'bg-green-600 hover:bg-green-700 cursor-pointer'
+                    : 'bg-gray-400 cursor-not-allowed opacity-60'
+                }`}
               >
-                Proceed to Payment Selection
+                {cardScanned ? 'Proceed to Payment Selection' : 'Scan RFID Card to Proceed'}
               </button>
 
               <button

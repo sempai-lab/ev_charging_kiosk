@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode, useMemo } from 'react';
 import type { User, ChargingSession, SystemSettings } from '../types';
 import { db } from '../services/database';
 import { hardware } from '../services/hardware';
@@ -116,20 +116,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // Memoize context value to prevent unnecessary re-renders
+  const contextValue = useMemo(
+    () => ({
+      currentUser,
+      setCurrentUser,
+      currentSession,
+      setCurrentSession,
+      settings,
+      updateSettings,
+      scanRfid,
+      batteryStatus,
+      refreshBatteryStatus,
+    }),
+    [
+      currentUser,
+      currentSession,
+      settings,
+      updateSettings,
+      scanRfid,
+      batteryStatus,
+      refreshBatteryStatus,
+    ]
+  );
+
   return (
-    <AppContext.Provider
-      value={{
-        currentUser,
-        setCurrentUser,
-        currentSession,
-        setCurrentSession,
-        settings,
-        updateSettings,
-        scanRfid,
-        batteryStatus,
-        refreshBatteryStatus,
-      }}
-    >
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   );
